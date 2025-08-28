@@ -8,6 +8,7 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  fadeOut?: boolean;
 }
 
 export default function FortuneTellerPage() {
@@ -23,6 +24,10 @@ export default function FortuneTellerPage() {
   const [displayedContent, setDisplayedContent] = useState('');
   const [particles, setParticles] = useState<Array<{id: number, x: number, y: number, delay: number}>>([]);
   const [isButtonPressed, setIsButtonPressed] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verificationError, setVerificationError] = useState('');
+  const [isKeyValid, setIsKeyValid] = useState(false);
+  const [isGeneratingFortune, setIsGeneratingFortune] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -48,14 +53,7 @@ export default function FortuneTellerPage() {
     scrollToBottom();
   }, [messages, streamingContent]);
 
-  // Auto-remove messages after fade-out
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setMessages(prev => prev.slice(-3)); // Keep only last 3 messages
-    }, 35000); // 35 seconds total (5s delay + 30s fade)
 
-    return () => clearTimeout(timer);
-  }, [messages.length]);
 
   // Function to display text character by character with delay
   const displayTextWithDelay = async (fullText: string) => {
@@ -66,16 +64,135 @@ export default function FortuneTellerPage() {
     }
   };
 
-  const playCookieCrackSound = () => {
-    const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoaW63k5Z1KFAxPps+');
-    audio.volume = 0.3;
-    audio.play().catch(() => {});
+
+
+  const verifyApiKey = async () => {
+    if (!apiKey.trim()) {
+      setVerificationError('Please enter an API key first.');
+      return;
+    }
+
+    setIsVerifying(true);
+    setVerificationError('');
+    setIsKeyValid(false);
+
+    try {
+      // Add timeout to prevent hanging
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          developer_message: 'You are a test. Respond with exactly: "API_KEY_VERIFIED"',
+          user_message: 'test',
+          api_key: apiKey,
+          model: 'gpt-4.1-mini'
+        }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        // The API returns a streaming response, so we just check if it's successful
+        // A successful response means the API key is valid
+        setIsKeyValid(true);
+        setVerificationError('');
+      } else {
+        setVerificationError('Invalid API key. Please check and try again.');
+        setIsKeyValid(false);
+      }
+    } catch (error) {
+      console.error('Error verifying API key:', error);
+      
+      if (error instanceof Error && error.name === 'AbortError') {
+        setVerificationError('Verification timed out. Please check your API key and try again.');
+      } else {
+        setVerificationError('Failed to verify API key. Please check your connection.');
+      }
+      
+      setIsKeyValid(false);
+    } finally {
+      setIsVerifying(false);
+    }
   };
 
-  const playPaperUnrollSound = () => {
-    const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoaW63k5Z1KFAxPps+');
-    audio.volume = 0.2;
-    audio.play().catch(() => {});
+  const handleGenerateFortune = async () => {
+    if (!apiKey.trim() || !isKeyValid || isGeneratingFortune) return;
+
+    setIsGeneratingFortune(true);
+    setIsStreaming(true);
+    setStreamingContent('');
+    setDisplayedContent('');
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          developer_message: 'You are a wise and mystical Chinese fortune teller. Generate a random fortune without requiring any user input. Respond with ancient wisdom, metaphors, and mystical language. Keep responses concise but profound. Use poetic language and speak as if you can see into the cosmic realm. Always end with a traditional Chinese fortune cookie style ending.',
+          user_message: 'Generate a random fortune for me',
+          api_key: apiKey,
+          model: 'gpt-4.1-mini'
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No response body');
+
+      let accumulatedContent = '';
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        const chunk = new TextDecoder().decode(value);
+        accumulatedContent += chunk;
+        setStreamingContent(accumulatedContent);
+      }
+
+      // Display text with animation
+      await displayTextWithDelay(accumulatedContent);
+
+      // Add the fortune to messages
+      const newFortuneMessage: Message = {
+        role: 'assistant',
+        content: accumulatedContent,
+        timestamp: new Date(),
+      };
+      setMessages([newFortuneMessage]);
+      
+      // Wait a bit, then start fading out the new fortune
+      setTimeout(() => {
+        // Trigger fade-out by setting a flag that will make the message fade
+        setMessages(prev => prev.map(msg => ({ ...msg, fadeOut: true })));
+      }, 8000); // Wait 8 seconds, then start fade
+      
+      setStreamingContent('');
+      setIsStreaming(false);
+
+    } catch (error) {
+      console.error('Error generating fortune:', error);
+      const errorMessage: Message = {
+        role: 'assistant',
+        content: 'The cosmic forces are disturbed. Please try again later.',
+        timestamp: new Date(),
+      };
+      setMessages([errorMessage]);
+    } finally {
+      setIsGeneratingFortune(false);
+      setIsStreaming(false);
+    }
   };
 
 
@@ -91,13 +208,13 @@ export default function FortuneTellerPage() {
     setStreamingContent('');
     setDisplayedContent('');
 
-    // Add user message to chat
-    const newUserMessage: Message = {
-      role: 'user',
-      content: userMessage,
-      timestamp: new Date(),
-    };
-    setMessages(prev => [...prev, newUserMessage]);
+          // Clear all previous messages and add only the new user message
+      const newUserMessage: Message = {
+        role: 'user',
+        content: userMessage,
+        timestamp: new Date(),
+      };
+      setMessages([newUserMessage]);
 
     try {
       const response = await fetch('/api/chat', {
@@ -118,7 +235,6 @@ export default function FortuneTellerPage() {
       }
 
       // Start the fortune cookie animation
-      playCookieCrackSound();
 
       const reader = response.body?.getReader();
       if (!reader) throw new Error('No response body');
@@ -134,17 +250,16 @@ export default function FortuneTellerPage() {
         setStreamingContent(accumulatedContent);
       }
 
-      // Play paper unroll sound and display text
-      playPaperUnrollSound();
+      // Display text with animation
       await displayTextWithDelay(accumulatedContent);
 
-      // Add assistant message to chat
+      // Replace all messages with just the user message and new AI response
       const newAssistantMessage: Message = {
         role: 'assistant',
         content: accumulatedContent,
         timestamp: new Date(),
       };
-      setMessages(prev => [...prev, newAssistantMessage]);
+      setMessages([newUserMessage, newAssistantMessage]);
       
       setStreamingContent('');
       setIsStreaming(false);
@@ -156,7 +271,7 @@ export default function FortuneTellerPage() {
         content: 'The stars are not aligned. Please check your API key and try again.',
         timestamp: new Date(),
       };
-      setMessages(prev => [...prev, errorMessage]);
+      setMessages([newUserMessage, errorMessage]);
       setIsStreaming(false);
     } finally {
       setIsLoading(false);
@@ -256,11 +371,14 @@ export default function FortuneTellerPage() {
               🔮 Mystical Fortune Teller
               </h1>
           </div>
+          
           <button
-            onClick={() => setShowSettings(!showSettings)}
-            className="p-2 rounded-lg bg-purple-500/20 hover:bg-purple-500/40 transition-all duration-300 border border-purple-400/50 hover:border-purple-300/70 hover:shadow-lg hover:shadow-purple-500/25"
+            onClick={handleGenerateFortune}
+            disabled={!apiKey.trim() || !isKeyValid || isGeneratingFortune}
+            className="px-6 py-2 bg-gradient-to-r from-amber-500 to-red-500 hover:from-amber-600 hover:to-red-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl text-white font-semibold transition-all duration-300 shadow-lg hover:shadow-amber-500/25"
+            style={{ fontFamily: 'Cinzel, serif' }}
           >
-            <Settings className="w-5 h-5 text-purple-200" />
+            {isGeneratingFortune ? '🔮 Consulting...' : 'GENERATE FORTUNE'}
           </button>
         </div>
       </header>
@@ -270,7 +388,7 @@ export default function FortuneTellerPage() {
           {/* Settings Panel */}
           <div className={`lg:col-span-1 ${showSettings ? 'block' : 'hidden lg:block'}`}>
             <div className="bg-black backdrop-blur-xl rounded-2xl p-6 border border-purple-400/30 shadow-2xl">
-              <h2 className="text-xl font-semibold text-transparent bg-clip-text bg-gradient-to-r from-purple-200 to-magenta-200 mb-4 flex items-center" style={{ fontFamily: 'Cinzel, serif' }}>
+              <h2 className="text-xl font-semibold text-purple-200 mb-4 flex items-center" style={{ fontFamily: 'Cinzel, serif' }}>
                 Mystical Configuration
               </h2>
               
@@ -285,8 +403,36 @@ export default function FortuneTellerPage() {
                     onChange={(e) => setApiKey(e.target.value)}
                     placeholder="sk-..."
                     className="w-full px-3 py-2 bg-black/40 border border-purple-400/50 rounded-lg text-white placeholder-purple-300 focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent focus:shadow-lg focus:shadow-purple-500/25 transition-all duration-300"
+                    style={{ 
+                      fontFamily: 'Cinzel, serif',
+                      textShadow: 'none',
+                      WebkitTextFillColor: 'white'
+                    }}
                   />
                 </div>
+                
+                <div>
+                  <button
+                    onClick={verifyApiKey}
+                    disabled={!apiKey.trim() || isVerifying}
+                    className="w-full py-2 px-4 bg-purple-500 hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-white font-bold transition-all duration-300 shadow-lg hover:shadow-purple-500/25"
+                    style={{ fontFamily: 'Cinzel, serif' }}
+                  >
+                    {isVerifying ? 'Verifying...' : 'Verify Key'}
+                  </button>
+                </div>
+                
+                {verificationError && (
+                  <div className="text-red-400 text-sm text-center bg-red-900/20 border border-red-500/30 rounded-lg p-3">
+                    {verificationError}
+                  </div>
+                )}
+                
+                {isKeyValid && (
+                  <div className="text-green-400 text-sm text-center bg-green-900/20 border border-green-500/30 rounded-lg p-3">
+                    ✅ API key verified successfully!
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -307,12 +453,11 @@ export default function FortuneTellerPage() {
                     className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-center'}`}
                     initial={{ opacity: 1 }}
                     animate={{ 
-                      opacity: isStreaming ? 1 : [1, 1, 0]
+                      opacity: message.fadeOut ? [1, 1, 0] : 1
                     }}
                     transition={{ 
-                      duration: isStreaming ? 0 : 30,
-                      times: isStreaming ? undefined : [0, 0.14, 1],
-                      delay: isStreaming ? 0 : 5
+                      duration: message.fadeOut ? 12 : 0.3,
+                      times: message.fadeOut ? [0, 0.85, 1] : undefined
                     }}
                   >
                     {message.role === 'user' ? (
@@ -325,7 +470,7 @@ export default function FortuneTellerPage() {
                         >
                           {/* User Message - Same format as response */}
                           <div className="max-w-xs sm:max-w-md">
-                            <div className="bg-amber-50 rounded-2xl px-6 py-4 shadow-lg">
+                            <div className="bg-amber-100/80 rounded-2xl px-6 py-4 shadow-lg border border-amber-200/60">
                               <div className="leading-relaxed text-purple-700 font-bold italic" style={{ fontFamily: 'Cinzel, Georgia, serif' }}>
                                 {message.content}
                               </div>
@@ -344,7 +489,7 @@ export default function FortuneTellerPage() {
                           
                           {/* Fortune Paper */}
                           <div className="max-w-xs sm:max-w-md">
-                            <div className="bg-amber-50 rounded-2xl px-6 py-4 shadow-lg">
+                            <div className="bg-amber-100/80 rounded-2xl px-6 py-4 shadow-lg border border-amber-200/60">
 
                               <div className="leading-relaxed text-black font-bold italic" style={{ fontFamily: 'Cinzel, Georgia, serif' }}>
                                 {message.content}
@@ -376,7 +521,7 @@ export default function FortuneTellerPage() {
                           animate={{ height: 'auto', opacity: 1, y: 0 }}
                           transition={{ duration: 0.8, ease: "easeOut" }}
                         >
-                          <div className="bg-amber-50 rounded-2xl px-6 py-4 shadow-lg">
+                          <div className="bg-amber-100/80 rounded-2xl px-6 py-4 shadow-lg border border-amber-200/60">
                             <div className="leading-relaxed text-black font-bold italic" style={{ fontFamily: 'Cinzel, Georgia, serif' }}>
                               {displayedContent}
                             </div>
@@ -399,7 +544,7 @@ export default function FortuneTellerPage() {
                       value={inputMessage}
                       onChange={(e) => setInputMessage(e.target.value)}
                       placeholder="What is it that you desire?"
-                      disabled={isLoading || !apiKey.trim()}
+                      disabled={isLoading || !apiKey.trim() || !isKeyValid}
                       className="w-full px-4 py-3 bg-[#2a2a2a] border-2 border-purple-400/50 rounded-xl text-white placeholder-purple-300 focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed shadow-lg transition-all duration-300 italic"
                       style={{ fontFamily: 'Cinzel, serif' }}
                     />
@@ -407,7 +552,7 @@ export default function FortuneTellerPage() {
                   </div>
                   <button
                     type="submit"
-                    disabled={isLoading || !inputMessage.trim() || !apiKey.trim()}
+                    disabled={isLoading || !inputMessage.trim() || !apiKey.trim() || !isKeyValid}
                     onMouseDown={() => setIsButtonPressed(true)}
                     onMouseUp={() => setIsButtonPressed(false)}
                     onMouseLeave={() => setIsButtonPressed(false)}
