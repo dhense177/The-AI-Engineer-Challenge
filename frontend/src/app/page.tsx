@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Moon, User, Settings, Key, Zap, Eye, Sparkles } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { Key } from 'lucide-react';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -16,7 +16,7 @@ export default function FortuneTellerPage() {
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [apiKey, setApiKey] = useState('');
-  const [showSettings, setShowSettings] = useState(false);
+  const [showSettings] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [isClient, setIsClient] = useState(false);
@@ -278,9 +278,7 @@ export default function FortuneTellerPage() {
     }
   };
 
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
+
 
 
 
